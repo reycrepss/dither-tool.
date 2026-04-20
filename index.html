@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Dither Tool</title>
+<style>
+    :root { --accent: #007bff; }
+    body { font-family: 'Segoe UI', Arial; background:#1a1a1a; color:#eee; margin: 0; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+    
+    .container { max-width: 900px; background: #2a2a2a; padding: 20px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; }
+    
+    .color-section { display: flex; gap: 20px; justify-content: center; align-items: center; margin-bottom: 20px; flex-wrap: wrap; background: #333; padding: 15px; border-radius: 8px; }
+    #colorPicker { width: 50px; height: 50px; border: none; cursor: pointer; background: none; }
+    
+    canvas { border: 2px solid #444; border-radius: 4px; max-width: 100%; height: auto; image-rendering: pixelated; background: #000; margin-top: 10px; }
+    
+    .palette { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin: 15px 0; min-height: 48px; padding: 10px; background: #111; border-radius: 8px; border: 1px inset #444; }
+    .color-box { width: 32px; height: 32px; border-radius: 4px; border: 1px solid #555; cursor: pointer; position: relative; }
+    .color-box:hover::after { content: '×'; position: absolute; color: white; background: rgba(0,0,0,0.6); width: 100%; height: 100%; display: grid; place-items: center; border-radius: 3px; font-size: 20px; }
+
+    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; text-align: left; background: #333; padding: 15px; border-radius: 8px; }
+    
+    button { padding: 10px 16px; border: none; border-radius: 6px; background: #444; color: white; cursor: pointer; transition: 0.2s; font-weight: bold; }
+    button:hover { background: #666; transform: translateY(-1px); }
+    button.primary { background: var(--accent); }
+    button.primary:hover { background: #0056b3; }
+    
+    input[type="number"], select { background: #222; border: 1px solid #555; color: white; padding: 8px; border-radius: 4px; }
+    label { font-size: 0.9em; color: #bbb; margin-bottom: 5px; display: inline-block; }
+    
+    .preset-section { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Dither Tool - by the wurld</h2>
+
+    <div class="color-section">
+        <div>
+            <label>Color</label><br>
+            <input type="color" id="colorPicker" value="#007bff">
+        </div>
+
+        <div>
+            <label>RGB Manual</label><br>
+            <input type="number" id="r" min="0" max="255" value="0" style="width:50px;">
+            <input type="number" id="g" min="0" max="255" value="123" style="width:50px;">
+            <input type="number" id="b" min="0" max="255" value="255" style="width:50px;">
+            <button onclick="addRGBColor()">+</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+            <button onclick="addColor()">Añadir a Paleta</button>
+            <button onclick="generatePalette()" class="primary">Auto (K-Means)</button>
+        </div>
+    </div>
+
+    <div class="preset-section">
+        <label>Cargar Paleta Clásica:</label><br>
+        <select id="presets" onchange="loadPreset(this.value)" style="width: 250px;">
+            <option value="">-- Selecciona un sistema --</option>
+            <option value="bw">Blanco y Negro (1-bit)</option>
+            <option value="gameboy">GameBoy Original</option>
+            <option value="gameboy_color">GameBoy Color</option>
+            <option value="nes">NES (Nintendo)</option>
+            <option value="c64">Commodore 64</option>
+            <option value="zx_spectrum">ZX Spectrum</option>
+            <option value="cga">CGA Mode 4</option>
+            <option value="apple_ii">Apple II</option>
+            <option value="pico8">PICO-8</option>
+        </select>
+    </div>
+
+    <div class="palette" id="palette"></div>
+
+    <div style="margin-bottom: 20px; display: flex; gap: 10px; justify-content: center;">
+        <input type="file" id="upload" accept="image/*" style="display:none">
+        <button onclick="document.getElementById('upload').click()"> Subir Imagen</button>
+        <button onclick="savePalette()"> Exportar .JSON</button>
+        <input type="file" id="loadPalette" accept=".json" style="display:none">
+        <button onclick="document.getElementById('loadPalette').click()"> Importar .JSON</button>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <div class="controls">
+        <div>
+            <label>Algoritmo de Dither:</label><br>
+            <select id="mode" style="width: 100%;">
+                <optgroup label="Difusión (Orgánico)">
+                    <option value="floyd">Floyd-Steinberg</option>
+                    <option value="atkinson">Atkinson</option>
+                    <option value="jarvis">Jarvis-Judice-Ninke</option>
+                    <option value="stucki">Stucki</option>
+                </optgroup>
+                <optgroup label="Ordenado (Patrón Retro)">
+                    <option value="bayer4">Bayer 4x4 (Clásico)</option>
+                    <option value="bayer8">Bayer 8x8 (Fino)</option>
+                </optgroup>
+            </select>
+        </div>
+        <div>
+            <label>Resolución (Tamaño de Píxel):</label><br>
+            <select id="resolution" style="width: 100%;">
+                <option value="original">Original</option>
+                <option value="128">64 bits (Fino)</option>
+                <option value="64">32 bits</option>
+                <option value="48">16 bits</option>
+                <option value="32">8 bits (Retro)</option>
+                <option value="16">4 bits (Pixel Art)</option>
+                <option value="8">1 bit (Mosaico)</option>
+            </select>
+        </div>
+        <div>
+            <label>Fuerza del Efecto:</label><br>
+            <input type="range" id="strength" min="0" max="1" step="0.1" value="1" style="width: 100%;">
+        </div>
+    </div>
+
+    <div style="display: flex; gap: 10px; justify-content: center;">
+        <button onclick="applyDither()" class="primary" style="padding: 15px 40px; font-size: 1.1em;">PROCESAR IMAGEN</button>
+        <button onclick="downloadImage()">⬇ Descargar PNG</button>
+    </div>
+</div>
+
+<script>
+let palette = ["#000000", "#ffffff"];
+const paletteDiv = document.getElementById('palette');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let imgFuente = null;
+
+const PRESETS = {
+    bw: ["#000000", "#ffffff"],
+    gameboy: ["#0f380f", "#306230", "#8bac0f", "#9bbc0f"],
+    gameboy_color: ["#ffffff", "#ffad63", "#833110", "#5e5ad6", "#211010"],
+    nes: ["#7C7C7C", "#0000FC", "#0000BC", "#4428BC", "#940084", "#A80020", "#A81000", "#881400", "#503000", "#007800", "#006800", "#005800", "#004058", "#BCBCBC", "#0078F8", "#0058F8", "#6844FC", "#D800CC", "#E40058", "#F83800", "#E45C10", "#AC7C00", "#00B800", "#00A800", "#00A844", "#008888", "#F8F8F8", "#3CBCFC", "#6888FC", "#9878F8", "#F878F8", "#F85898", "#F87858", "#FCA044", "#F8B800", "#B8F818", "#58D854", "#58F898", "#00E8D8", "#787878"],
+    c64: ["#000000", "#FFFFFF", "#880000", "#AAFFEE", "#CC44CC", "#00CC55", "#0000AA", "#EEEE77", "#DD8855", "#664400", "#FF7777", "#333333", "#777777", "#AAFF66", "#0088FF", "#BBBBBB"],
+    zx_spectrum: ["#000000", "#0000D7", "#D70000", "#D700D7", "#00D700", "#00D7D7", "#D7D700", "#D7D7D7", "#0000FF", "#FF0000", "#FF00FF", "#00FF00", "#00FFFF", "#FFFF00", "#FFFFFF"],
+    cga: ["#000000", "#55ffff", "#ff55ff", "#ffffff"],
+    apple_ii: ["#000000", "#70344c", "#3e31a2", "#ff44fd", "#007c44", "#808080", "#19bcf2", "#d1bdff", "#275200", "#ee821a", "#808080", "#f2a0d1", "#00d41d", "#becc71", "#59fe94", "#ffffff"],
+    pico8: ["#000000", "#1D2B53", "#7E2553", "#008751", "#AB5236", "#5F574F", "#C2C3C7", "#FFF1E8", "#FF004D", "#FFA300", "#FFEC27", "#00E436", "#29ADFF", "#83769C", "#FF77A8", "#FFCCAA"]
+};
+
+const BAYER_4x4 = [[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+const BAYER_8x8 = [[0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],[12,44,4,36,14,46,6,38],[60,28,52,20,62,30,54,22],[3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],[15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]];
+
+document.getElementById('colorPicker').addEventListener('input', (e) => {
+    const rgb = hexToRgb(e.target.value);
+    document.getElementById('r').value = rgb[0];
+    document.getElementById('g').value = rgb[1];
+    document.getElementById('b').value = rgb[2];
+});
+
+function renderPalette(){
+    paletteDiv.innerHTML='';
+    palette.forEach((c,i)=>{
+        let d=document.createElement('div');
+        d.className='color-box';
+        d.style.background=c;
+        d.onclick=()=>{palette.splice(i,1);renderPalette();};
+        paletteDiv.appendChild(d);
+    });
+}
+renderPalette();
+
+function loadPreset(key) {
+    if (key && PRESETS[key]) { palette = [...PRESETS[key]]; renderPalette(); }
+}
+
+function addColor(){ palette.push(document.getElementById('colorPicker').value); renderPalette(); }
+
+function addRGBColor(){
+    let r = parseInt(document.getElementById('r').value) || 0;
+    let g = parseInt(document.getElementById('g').value) || 0;
+    let b = parseInt(document.getElementById('b').value) || 0;
+    let hex = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+    palette.push(hex);
+    renderPalette();
+}
+
+document.getElementById('upload').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(!file) return;
+    let img = new Image();
+    img.onload = () => {
+        imgFuente = img;
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+    };
+    img.src = URL.createObjectURL(file);
+});
+
+function hexToRgb(h){
+    let n=parseInt(h.slice(1),16);
+    return [(n>>16)&255,(n>>8)&255,n&255];
+}
+
+function closest(r,g,b){
+    let best=[0,0,0], min=Infinity;
+    for(let i=0; i<palette.length; i++){
+        let [pr,pg,pb] = hexToRgb(palette[i]);
+        let d = 0.3*(r-pr)**2 + 0.59*(g-pg)**2 + 0.11*(b-pb)**2;
+        if(d < min){ min=d; best=[pr,pg,pb]; }
+    }
+    return best;
+}
+
+function applyDither(){
+    if(!imgFuente || palette.length === 0) return;
+    
+    let mode = document.getElementById('mode').value;
+    let strength = parseFloat(document.getElementById('strength').value);
+    let res = document.getElementById('resolution').value;
+
+    let w = imgFuente.width;
+    let h = imgFuente.height;
+    if(res !== "original") {
+        let size = parseInt(res);
+        let ratio = imgFuente.width / imgFuente.height;
+        w = size;
+        h = Math.round(size / ratio);
+    }
+
+    let tCanvas = document.createElement('canvas');
+    let tCtx = tCanvas.getContext('2d');
+    tCanvas.width = w;
+    tCanvas.height = h;
+    tCtx.drawImage(imgFuente, 0, 0, w, h);
+    
+    let imgData = tCtx.getImageData(0, 0, w, h);
+    let d = imgData.data;
+
+    for(let y=0; y<h; y++){
+        for(let x=0; x<w; x++){
+            let i = (y * w + x) * 4;
+            if(mode.startsWith('bayer')) {
+                let matrix = (mode === 'bayer4') ? BAYER_4x4 : BAYER_8x8;
+                let mSize = matrix.length;
+                let threshold = (matrix[y % mSize][x % mSize] / (mSize * mSize)) - 0.5;
+                let r = d[i] + (threshold * 255 * strength);
+                let g = d[i+1] + (threshold * 255 * strength);
+                let b = d[i+2] + (threshold * 255 * strength);
+                let [nr, ng, nb] = closest(r, g, b);
+                d[i] = nr; d[i+1] = ng; d[i+2] = nb;
+            } else {
+                let oldR = d[i], oldG = d[i+1], oldB = d[i+2];
+                let [nr,ng,nb] = closest(oldR, oldG, oldB);
+                d[i]=nr; d[i+1]=ng; d[i+2]=nb;
+                let er = (oldR - nr) * strength;
+                let eg = (oldG - ng) * strength;
+                let eb = (oldB - nb) * strength;
+                spread(x, y, er, eg, eb, d, w, h, mode);
+            }
+        }
+    }
+
+    tCtx.putImageData(imgData, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tCanvas, 0, 0, canvas.width, canvas.height);
+}
+
+function spread(x,y,er,eg,eb,d,w,h,mode){
+    let patterns = {
+        'floyd': [[1,0,7/16],[-1,1,3/16],[0,1,5/16],[1,1,1/16]],
+        'atkinson': [[1,0,1/8],[2,0,1/8],[-1,1,1/8],[0,1,1/8],[1,1,1/8],[0,2,1/8]],
+        'jarvis': [[1,0,7/48],[2,0,5/48],[-2,1,3/48],[-1,1,5/48],[0,1,7/48],[1,1,5/48],[2,1,3/48],[-2,2,1/48],[-1,2,3/48],[0,2,5/48],[1,2,3/48],[2,2,1/48]],
+        'stucki': [[1,0,8/42],[2,0,4/42],[-2,1,2/42],[-1,1,4/42],[0,1,8/42],[1,1,4/42],[2,1,2/42],[-2,2,1/42],[-1,2,2/42],[0,2,4/42],[1,2,2/42],[2,2,1/42]]
+    };
+    let pattern = patterns[mode];
+    if(!pattern) return;
+    for(let p of pattern){
+        let nx=x+p[0], ny=y+p[1];
+        if(nx>=0 && ny>=0 && nx<w && ny<h){
+            let i=(ny*w+nx)*4;
+            d[i] += er*p[2]; d[i+1] += eg*p[2]; d[i+2] += eb*p[2];
+        }
+    }
+}
+
+function generatePalette(){
+    if(!imgFuente) return;
+    let tC = document.createElement('canvas');
+    tC.width = 100; tC.height = 100;
+    tC.getContext('2d').drawImage(imgFuente, 0, 0, 100, 100);
+    let data = tC.getContext('2d').getImageData(0,0,100,100).data;
+    
+    let k = 8; let centroids = [];
+    for(let i=0; i<k; i++){
+        let idx = Math.floor(Math.random()*data.length/4)*4;
+        centroids.push([data[idx], data[idx+1], data[idx+2]]);
+    }
+    for(let iter=0; iter<5; iter++){
+        let groups = Array.from({length:k}, ()=>[]);
+        for(let i=0; i<data.length; i+=4){
+            let p=[data[i], data[i+1], data[i+2]], best=0, min=Infinity;
+            centroids.forEach((c,j)=>{
+                let d=(p[0]-c[0])**2+(p[1]-c[1])**2+(p[2]-c[2])**2;
+                if(d<min){min=d; best=j;}
+            });
+            groups[best].push(p);
+        }
+        centroids = groups.map(g => {
+            if(!g.length) return [Math.random()*255, Math.random()*255, Math.random()*255];
+            let s = g.reduce((a,b)=>[a[0]+b[0], a[1]+b[1], a[2]+b[2]], [0,0,0]);
+            return [s[0]/g.length, s[1]/g.length, s[2]/g.length];
+        });
+    }
+    palette = centroids.map(c=>`#${((1<<24)+(c[0]<<16)+(c[1]<<8)+c[2]|0).toString(16).slice(1)}`);
+    renderPalette();
+}
+
+function savePalette(){
+    let blob=new Blob([JSON.stringify(palette)],{type:'application/json'});
+    let a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='palette.json';
+    a.click();
+}
+
+document.getElementById('loadPalette').addEventListener('change',e=>{
+    let r=new FileReader();
+    r.onload=()=>{palette=JSON.parse(r.result); renderPalette();};
+    r.readAsText(e.target.files[0]);
+});
+
+function downloadImage(){
+    let a=document.createElement('a');
+    a.href=canvas.toDataURL();
+    a.download='dither_image.png';
+    a.click();
+}
+</script>
+</body>
+</html>
